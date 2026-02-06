@@ -5,6 +5,7 @@
 #include "spinlock.h"
 #include "proc.h"
 #include "defs.h"
+#include "getproc.h"
 
 struct cpu cpus[NCPU];
 
@@ -687,4 +688,31 @@ procdump(void)
     printf("%d %s %s", p->pid, state, p->name);
     printf("\n");
   }
+}
+
+
+int
+getprocs(uint64 addr)
+{
+  struct proc *p;
+  struct procinfo pinfo;
+  int i = 0;
+  uint64 dst_addr;
+
+  for(p = proc; p < &proc[NPROC]; p++){
+      acquire(&p->lock);
+      pinfo.pid = p->pid;
+      pinfo.state = p->state; // Enum converts to int automatically
+      pinfo.sz = p->sz;
+      safestrcpy(pinfo.name, p->name, sizeof(pinfo.name));
+      release(&p->lock);
+
+      dst_addr = addr + (i * sizeof(struct procinfo));
+
+      if(copyout(myproc()->pagetable, dst_addr, (char*)&pinfo, sizeof(pinfo)) < 0){
+        return -1;
+      }
+      i++;
+  }
+  return 0;
 }
