@@ -167,12 +167,12 @@ syscall(void)
   num = p->trapframe->a7;
 
   if(num > 0 && num < NELEM(syscalls) && syscalls[num]) {
-    // 1. Run the system call
+    // Use num to lookup the system call function for num, call it,
+    // and store its return value in p->trapframe->a0
     p->trapframe->a0 = syscalls[num]();
     
-    // 2. CHECK TRACE MASK
+    // CHECK TRACE MASK
     if((1 << num) & p->trace_mask) {
-      // FIX: Add (int) cast below ------------------------------------v
       printf("%d: syscall %s -> %d\n", p->pid, syscall_names[num], (int)p->trapframe->a0);
     }
     
