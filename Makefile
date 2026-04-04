@@ -136,6 +136,7 @@ UPROGS=\
 	$U/_ln\
 	$U/_ls\
 	$U/_mkdir\
+	$U/_mmaptest\
 	$U/_ps\
 	$U/_rm\
 	$U/_sh\
@@ -148,6 +149,7 @@ UPROGS=\
 	$U/_logstress\
 	$U/_forphan\
 	$U/_dorphan\
+	
 
 fs.img: mkfs/mkfs README LICENSE $(UPROGS)
 	mkfs/mkfs fs.img README LICENSE $(UPROGS)

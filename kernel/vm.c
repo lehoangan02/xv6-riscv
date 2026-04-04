@@ -8,6 +8,16 @@
 #include "proc.h"
 #include "fs.h"
 
+#define SHMEM_REGION 0x4000000
+
+// Global structure to track the single shared memory page
+struct {
+  uint64 pa;              // Physical address of the shared page
+  int refcount;           // Reference count
+  struct spinlock lock;   // Lock to protect access
+  int allocated;          // Whether the page is allocated
+} shmem_page;
+
 /*
  * the kernel's page table.
  */
@@ -203,6 +213,19 @@ uvmunmap(pagetable_t pagetable, uint64 va, uint64 npages, int do_free)
       continue;   
     if((*pte & PTE_V) == 0)  // has physical page been allocated?
       continue;
+    if(a == SHMEM_REGION) {
+      // Shared memory page — handle via refcount, don't kfree directly
+      *pte = 0;
+      acquire(&shmem_page.lock);
+      shmem_page.refcount--;
+      if(shmem_page.refcount == 0) {
+        kfree((void *)shmem_page.pa);
+        shmem_page.pa = 0;
+        shmem_page.allocated = 0;
+      }
+      release(&shmem_page.lock);
+      continue;
+    }
     if(do_free){
       uint64 pa = PTE2PA(*pte);
       kfree((void*)pa);
@@ -308,6 +331,18 @@ uvmcopy(pagetable_t old, pagetable_t new, uint64 sz)
       continue;   // physical page hasn't been allocated
     pa = PTE2PA(*pte);
     flags = PTE_FLAGS(*pte);
+
+    if(i == SHMEM_REGION) {
+      // Don't copy — share the same physical page
+      if(mappages(new, i, PGSIZE, pa, flags) != 0) {
+        goto err;
+      }
+      acquire(&shmem_page.lock);
+      shmem_page.refcount++;
+      release(&shmem_page.lock);
+      continue;
+    }
+
     if((mem = kalloc()) == 0)
       goto err;
     memmove(mem, (char*)pa, PGSIZE);
@@ -315,6 +350,17 @@ uvmcopy(pagetable_t old, pagetable_t new, uint64 sz)
       kfree(mem);
       goto err;
     }
+  }
+
+  pte_t *pte_shmem = walk(old, SHMEM_REGION, 0);
+  if(pte_shmem && (*pte_shmem & PTE_V)) {
+    uint64 pa_sh = PTE2PA(*pte_shmem);
+    uint flags_sh = PTE_FLAGS(*pte_shmem);
+    if(mappages(new, SHMEM_REGION, PGSIZE, pa_sh, flags_sh) != 0)
+      goto err;
+    acquire(&shmem_page.lock);
+    shmem_page.refcount++;
+    release(&shmem_page.lock);
   }
   return 0;
 
@@ -482,5 +528,89 @@ ismapped(pagetable_t pagetable, uint64 va)
   if (*pte & PTE_V){
     return 1;
   }
+  return 0;
+}
+
+void
+init_shmem(void)
+{
+  initlock(&shmem_page.lock, "shmem");
+  shmem_page.pa = 0;
+  shmem_page.refcount = 0;
+  shmem_page.allocated = 0;
+}
+// mmap: allocate/map a shared memory page
+uint64
+mmap(void)
+{
+  struct proc *p = myproc();
+
+  acquire(&shmem_page.lock);
+
+  if(!shmem_page.allocated) {
+    // First time: allocate a new physical page
+    void *mem = kalloc();
+    if(mem == 0) {
+      release(&shmem_page.lock);
+      return 0;
+    }
+    memset(mem, 0, PGSIZE);
+    shmem_page.pa = (uint64)mem;
+    shmem_page.refcount = 1;
+    shmem_page.allocated = 1;
+  } else {
+    // Page already exists: just bump reference count
+    shmem_page.refcount++;
+  }
+
+  // Map the physical page into this process's address space
+  if(mappages(p->pagetable, SHMEM_REGION, PGSIZE,
+              shmem_page.pa, PTE_R | PTE_W | PTE_U) != 0) {
+    // Mapping failed — undo the refcount increment
+    shmem_page.refcount--;
+    if(shmem_page.refcount == 0) {
+      kfree((void *)shmem_page.pa);
+      shmem_page.pa = 0;
+      shmem_page.allocated = 0;
+    }
+    release(&shmem_page.lock);
+    return 0;
+  }
+
+  release(&shmem_page.lock);
+  return SHMEM_REGION;
+}
+
+// munmap: unmap a shared memory page
+int
+munmap(uint64 va)
+{
+  struct proc *p = myproc();
+
+  // Validate address
+  if(va != SHMEM_REGION)
+    return -1;
+
+  // Walk the page table to find the PTE
+  pte_t *pte = walk(p->pagetable, va, 0);
+  if(pte == 0 || (*pte & PTE_V) == 0)
+    return -1;
+
+  // Clear the PTE (unmap from this process)
+  *pte = 0;
+
+  // Flush TLB for this address
+  sfence_vma();
+
+  // Decrement reference count
+  acquire(&shmem_page.lock);
+  shmem_page.refcount--;
+  if(shmem_page.refcount == 0) {
+    kfree((void *)shmem_page.pa);
+    shmem_page.pa = 0;
+    shmem_page.allocated = 0;
+  }
+  release(&shmem_page.lock);
+
   return 0;
 }
