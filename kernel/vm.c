@@ -324,6 +324,8 @@ uvmcopy(pagetable_t old, pagetable_t new, uint64 sz)
   uint flags;
   char *mem;
 
+  int shmem_done = 0;
+
   for(i = 0; i < sz; i += PGSIZE){
     if((pte = walk(old, i, 0)) == 0)
       continue;   // page table entry hasn't been allocated
@@ -333,6 +335,7 @@ uvmcopy(pagetable_t old, pagetable_t new, uint64 sz)
     flags = PTE_FLAGS(*pte);
 
     if(i == SHMEM_REGION) {
+      shmem_done = 1;
       // Don't copy — share the same physical page
       if(mappages(new, i, PGSIZE, pa, flags) != 0) {
         goto err;
@@ -352,15 +355,17 @@ uvmcopy(pagetable_t old, pagetable_t new, uint64 sz)
     }
   }
 
-  pte_t *pte_shmem = walk(old, SHMEM_REGION, 0);
-  if(pte_shmem && (*pte_shmem & PTE_V)) {
-    uint64 pa_sh = PTE2PA(*pte_shmem);
-    uint flags_sh = PTE_FLAGS(*pte_shmem);
-    if(mappages(new, SHMEM_REGION, PGSIZE, pa_sh, flags_sh) != 0)
-      goto err;
-    acquire(&shmem_page.lock);
-    shmem_page.refcount++;
-    release(&shmem_page.lock);
+  if (!shmem_done) {
+    pte_t *pte_shmem = walk(old, SHMEM_REGION, 0);
+    if(pte_shmem && (*pte_shmem & PTE_V)) {
+      uint64 pa_sh = PTE2PA(*pte_shmem);
+      uint flags_sh = PTE_FLAGS(*pte_shmem);
+      if(mappages(new, SHMEM_REGION, PGSIZE, pa_sh, flags_sh) != 0)
+        goto err;
+      acquire(&shmem_page.lock);
+      shmem_page.refcount++;
+      release(&shmem_page.lock);
+  }
   }
   return 0;
 
