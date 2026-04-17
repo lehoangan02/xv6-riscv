@@ -135,9 +135,9 @@ sys_trace(void)
 uint64
 sys_mmap(void)
 {
-  int id;
-  argint(0, &id);
-  return mmap(id);
+  uint64 id_addr;
+  argaddr(0, &id_addr);
+  return mmap(id_addr);
 }
 
 uint64

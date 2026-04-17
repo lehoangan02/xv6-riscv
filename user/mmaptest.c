@@ -8,17 +8,18 @@ main(int argc, char *argv[])
 {
   int pid;
   uint64 shared_addr;
+  int shmid = 0;
 
   printf("=== Test 1: Basic shared memory (like before) ===\n");
 
-  // id=0 means create a NEW shared region
-  shared_addr = mmap(0);
+  // shmid=0 means create a NEW shared region; kernel writes back new id.
+  shared_addr = mmap(&shmid);
   if(shared_addr == 0){
     printf("mmap failed\n");
     exit(1);
   }
 
-  printf("Mapped shared memory at %p\n", (void*)shared_addr);
+  printf("Mapped shared memory at %p (id=%d)\n", (void*)shared_addr, shmid);
 
   int *shared_data = (int*)shared_addr;
   *shared_data = 42;
@@ -51,16 +52,18 @@ main(int argc, char *argv[])
   printf("\n=== Test 2: Multiple shared memory regions ===\n");
 
   // Create two separate shared regions
-  uint64 addr1 = mmap(0);  // new region
-  uint64 addr2 = mmap(0);  // another new region
+  int id1 = 0;
+  int id2 = 0;
+  uint64 addr1 = mmap(&id1);  // new region
+  uint64 addr2 = mmap(&id2);  // another new region
 
   if(addr1 == 0 || addr2 == 0){
     printf("mmap failed for multiple regions\n");
     exit(1);
   }
 
-  printf("Region 1 at %p\n", (void*)addr1);
-  printf("Region 2 at %p\n", (void*)addr2);
+  printf("Region 1 at %p (id=%d)\n", (void*)addr1, id1);
+  printf("Region 2 at %p (id=%d)\n", (void*)addr2, id2);
 
   // Write different values to each region
   int *data1 = (int*)addr1;
@@ -81,6 +84,17 @@ main(int argc, char *argv[])
     *data1 = 333;
     *data2 = 444;
     printf("Child wrote Region 1: %d, Region 2: %d\n", *data1, *data2);
+    // Attach to parent's first region using id1 and verify it is the same page.
+    int attach_id = id1;
+    uint64 addr1_alias = mmap(&attach_id);
+    if(addr1_alias == 0)
+      printf("Child attach by id failed\n");
+    else {
+      int *alias_data = (int *)addr1_alias;
+      printf("Child attach read Region 1 via alias: %d\n", *alias_data);
+      if(addr1_alias != addr1)
+        munmap(addr1_alias);
+    }
     munmap(addr1);
     munmap(addr2);
     exit(0);

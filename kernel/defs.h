@@ -170,7 +170,7 @@ int             copyinstr(pagetable_t, char *, uint64, uint64);
 int             ismapped(pagetable_t, uint64);
 uint64          vmfault(pagetable_t, uint64, int);
 void            init_shmem(void);
-uint64          mmap(int id);
+uint64          mmap(uint64 id_addr);
 int             munmap(uint64 va);
 
 // plic.c

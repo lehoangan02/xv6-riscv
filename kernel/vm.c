@@ -561,15 +561,21 @@ init_shmem(void)
 }
 // mmap: allocate/map a shared memory page
 uint64
-mmap(int id)
+mmap(uint64 id_addr)
 {
   struct proc *p = myproc();
   struct shmem_entry *entry = 0;
   int slot = -1;
+  int id;
+  int is_create = 0;
+
+  if(copyin(p->pagetable, (char *)&id, id_addr, sizeof(id)) != 0)
+    return 0;
 
   acquire(&shmem_table.lock);
 
   if(id == 0) {
+    is_create = 1;
     // Create new shared region — find a free slot
     for(int i = 0; i < MAX_SHMEM; i++) {
       if(!shmem_table.pages[i].allocated) {
@@ -597,6 +603,18 @@ mmap(int id)
     entry->allocated = 1;
     entry->id = shmem_table.next_id++;
 
+    // Return the allocated shared memory ID back to user space.
+    id = entry->id;
+    if(copyout(p->pagetable, id_addr, (char *)&id, sizeof(id)) != 0) {
+      kfree((void *)entry->pa);
+      entry->pa = 0;
+      entry->refcount = 0;
+      entry->allocated = 0;
+      entry->id = 0;
+      release(&shmem_table.lock);
+      return 0;
+    }
+
   } else {
     // Attach to existing shared region by id
     for(int i = 0; i < MAX_SHMEM; i++) {
@@ -611,25 +629,38 @@ mmap(int id)
       release(&shmem_table.lock);
       return 0;
     }
-    entry->refcount++;
   }
 
   // Virtual address = SHMEM_REGION + slot * PGSIZE
   uint64 va = SHMEM_REGION + slot * PGSIZE;
 
+  // If already mapped in this process, avoid remapping and panic.
+  pte_t *pte = walk(p->pagetable, va, 0);
+  if(pte && (*pte & PTE_V)) {
+    if(PTE2PA(*pte) == entry->pa) {
+      release(&shmem_table.lock);
+      return va;
+    }
+    release(&shmem_table.lock);
+    return 0;
+  }
+
   // Map the physical page into this process's address space
   if(mappages(p->pagetable, va, PGSIZE,
               entry->pa, PTE_R | PTE_W | PTE_U) != 0) {
-    entry->refcount--;
-    if(entry->refcount == 0) {
+    if(is_create) {
       kfree((void *)entry->pa);
       entry->pa = 0;
+      entry->refcount = 0;
       entry->allocated = 0;
       entry->id = 0;
     }
     release(&shmem_table.lock);
     return 0;
   }
+
+  if(!is_create)
+    entry->refcount++;
 
   release(&shmem_table.lock);
   return va;
